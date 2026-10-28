@@ -34,6 +34,12 @@ A typical batch lifecycle is:
 
 Major state changes are emitted as blockchain events to provide an auditable provenance history.
 
+## System Architecture
+
+The high-level architecture shows how pharmaceutical supply-chain stakeholders interact with the Solidity smart contract, web dApp, and optional off-chain storage.
+
+![Pharmaceutical Provenance System Architecture](docs/architecture.png)
+
 ## Stakeholder Roles
 
 ### Administrator
