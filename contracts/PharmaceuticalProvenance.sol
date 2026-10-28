@@ -274,6 +274,19 @@ contract PharmaceuticalProvenance {
      * @param batchId Identifier of the batch being transferred.
      * @param newCustodian Wallet address receiving custody.
      */
+    /**
+     * @notice Transfers custody of a pharmaceutical batch to the next
+     *         authorized participant in the supply chain.
+     *
+     * @dev Valid custody transitions are:
+     *      Manufacturer -> Distributor
+     *      Distributor  -> Pharmacy
+     *
+     *      The caller must be the current custodian of the batch.
+     *
+     * @param batchId Unique identifier of the pharmaceutical batch.
+     * @param newCustodian Wallet address receiving custody of the batch.
+     */
     function transferCustody(
         string memory batchId,
         address newCustodian
@@ -282,27 +295,55 @@ contract PharmaceuticalProvenance {
         batchExists(batchId)
         onlyCurrentCustodian(batchId)
     {
-        require(newCustodian != address(0), "Invalid custodian address");
         require(
-            roles[newCustodian] != Role.None,
-            "New custodian is not a registered stakeholder"
+            newCustodian != address(0),
+            "Invalid custodian address"
         );
+    
         require(
             newCustodian != msg.sender,
             "Batch is already held by this custodian"
         );
-
-        address previousCustodian = batches[batchId].currentCustodian;
-
-        batches[batchId].currentCustodian = newCustodian;
-        batches[batchId].status = BatchStatus.InTransit;
-
+    
+        Role senderRole = roles[msg.sender];
+        Role recipientRole = roles[newCustodian];
+    
+        // Manufacturer can transfer only to a Distributor.
+        if (senderRole == Role.Manufacturer) {
+            require(
+                recipientRole == Role.Distributor,
+                "Manufacturer can transfer only to Distributor"
+            );
+        }
+    
+        // Distributor can transfer only to a Pharmacy.
+        else if (senderRole == Role.Distributor) {
+            require(
+                recipientRole == Role.Pharmacy,
+                "Distributor can transfer only to Pharmacy"
+            );
+        }
+    
+        // Pharmacy is the final custodian in the current prototype.
+        else {
+            revert("Current role cannot transfer custody");
+        }
+    
+        address previousCustodian =
+            batches[batchId].currentCustodian;
+    
+        batches[batchId].currentCustodian =
+            newCustodian;
+    
+        batches[batchId].status =
+            BatchStatus.InTransit;
+    
         emit CustodyTransferred(
             batchId,
             previousCustodian,
             newCustodian
         );
-
+    
         emit BatchStatusUpdated(
             batchId,
             BatchStatus.InTransit
