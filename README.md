@@ -299,8 +299,8 @@ Later project milestones will extend the current foundation with:
 
 ## Team Members
 
+- Madhurika Kandukoori
+- Jahnavi Krishna Kovvuri
 - Anvitha Nagireddy
 - Charan Kappala
 - Guru Charan Alla
-- Jahnavi Krishna Kovvuri
-- Madhurika Kandukoori
