@@ -3,32 +3,28 @@ pragma solidity ^0.8.20;
 
 /**
  * @title PharmaceuticalProvenance
- * @notice Smart contract design draft for a blockchain-based pharmaceutical
- *         drug provenance and anti-counterfeit system.
+ * @notice Blockchain-based pharmaceutical drug provenance and
+ *         anti-counterfeit prototype for CSE 540.
  *
- * @dev The contract models the movement of pharmaceutical batches across
- *      manufacturers, distributors, pharmacies, and regulators.
+ * @dev The contract models pharmaceutical batches moving through:
  *
- *      Core responsibilities:
- *      - Register authorized supply-chain stakeholders
- *      - Register pharmaceutical batches
- *      - Transfer batch custody between stakeholders
- *      - Update batch status
- *      - Allow regulators to verify batches
- *      - Emit events that provide an auditable provenance history
+ *      Manufacturer -> Distributor -> Pharmacy
  *
- *      This contract is an initial design draft for CSE 540.
+ *      A Regulator independently verifies registered batches.
+ *      Consumers do not require a blockchain role because provenance
+ *      information is available through public read-only functions.
+ *
+ *      Major state changes emit events so that an off-chain application
+ *      can reconstruct an auditable provenance history.
  */
 contract PharmaceuticalProvenance {
 
     // =============================================================
-    //                         ENUMS
+    //                            ENUMS
     // =============================================================
 
     /**
-     * @notice Roles available to authorized supply-chain participants.
-     * @dev Consumers are not assigned a role because they only require
-     *      read access to provenance information.
+     * @notice Roles assigned to authorized supply-chain participants.
      */
     enum Role {
         None,
@@ -39,7 +35,7 @@ contract PharmaceuticalProvenance {
     }
 
     /**
-     * @notice Represents the current lifecycle status of a drug batch.
+     * @notice Lifecycle states of a pharmaceutical batch.
      */
     enum BatchStatus {
         Manufactured,
@@ -49,22 +45,22 @@ contract PharmaceuticalProvenance {
     }
 
     // =============================================================
-    //                         STRUCTS
+    //                           STRUCTS
     // =============================================================
 
     /**
      * @notice Stores the current on-chain state of a pharmaceutical batch.
      *
-     * @param batchId Unique identifier assigned to the batch.
+     * @param batchId Unique identifier of the batch.
      * @param drugName Human-readable pharmaceutical product name.
-     * @param manufactureDate Manufacturing timestamp/date representation.
-     * @param expirationDate Expiration timestamp/date representation.
-     * @param manufacturer Wallet address that originally registered the batch.
+     * @param manufactureDate Manufacturing timestamp.
+     * @param expirationDate Expiration timestamp.
+     * @param manufacturer Wallet that originally registered the batch.
      * @param currentCustodian Wallet currently responsible for the batch.
-     * @param status Current lifecycle status of the batch.
+     * @param status Current lifecycle status.
      * @param certificateHash Optional reference to an off-chain certificate.
-     * @param verified Indicates whether a regulator has verified the batch.
-     * @param exists Used to determine whether the batch has been registered.
+     * @param verified Whether an authorized regulator verified the batch.
+     * @param exists Whether the batch has been registered.
      */
     struct DrugBatch {
         string batchId;
@@ -80,24 +76,30 @@ contract PharmaceuticalProvenance {
     }
 
     // =============================================================
-    //                      STATE VARIABLES
-    // =============================================================
-
-    /// @notice Address responsible for initially authorizing stakeholders.
-    address public admin;
-
-    /// @notice Maps stakeholder wallet addresses to their authorized roles.
-    mapping(address => Role) public roles;
-
-    /// @notice Maps unique batch identifiers to pharmaceutical batch records.
-    mapping(string => DrugBatch) private batches;
-
-    // =============================================================
-    //                           EVENTS
+    //                       STATE VARIABLES
     // =============================================================
 
     /**
-     * @notice Emitted when the administrator assigns a role to a stakeholder.
+     * @notice Administrator responsible for authorizing stakeholders.
+     */
+    address public admin;
+
+    /**
+     * @notice Maps wallet addresses to authorized stakeholder roles.
+     */
+    mapping(address => Role) public roles;
+
+    /**
+     * @notice Maps unique batch IDs to pharmaceutical batch records.
+     */
+    mapping(string => DrugBatch) private batches;
+
+    // =============================================================
+    //                            EVENTS
+    // =============================================================
+
+    /**
+     * @notice Emitted when the administrator authorizes a stakeholder.
      */
     event StakeholderRegistered(
         address indexed account,
@@ -105,7 +107,7 @@ contract PharmaceuticalProvenance {
     );
 
     /**
-     * @notice Emitted when a manufacturer registers a new pharmaceutical batch.
+     * @notice Emitted when a manufacturer registers a pharmaceutical batch.
      */
     event BatchRegistered(
         string batchId,
@@ -122,7 +124,7 @@ contract PharmaceuticalProvenance {
     );
 
     /**
-     * @notice Emitted when the lifecycle status of a batch changes.
+     * @notice Emitted whenever the lifecycle status of a batch changes.
      */
     event BatchStatusUpdated(
         string batchId,
@@ -143,26 +145,31 @@ contract PharmaceuticalProvenance {
 
     /**
      * @notice Initializes the contract administrator.
-     * @dev The wallet deploying the contract becomes the administrator.
+     * @dev The deploying wallet becomes the administrator.
      */
     constructor() {
         admin = msg.sender;
     }
 
     // =============================================================
-    //                         MODIFIERS
+    //                          MODIFIERS
     // =============================================================
 
     /**
-     * @notice Restricts a function to the contract administrator.
+     * @notice Restricts an operation to the administrator.
      */
     modifier onlyAdmin() {
-        require(msg.sender == admin, "Only admin can perform this action");
+        require(
+            msg.sender == admin,
+            "Only admin can perform this action"
+        );
         _;
     }
 
     /**
-     * @notice Restricts a function to a specific stakeholder role.
+     * @notice Restricts an operation to a specified stakeholder role.
+     *
+     * @param requiredRole Role required to execute the function.
      */
     modifier onlyRole(Role requiredRole) {
         require(
@@ -173,17 +180,26 @@ contract PharmaceuticalProvenance {
     }
 
     /**
-     * @notice Ensures that a pharmaceutical batch has already been registered.
+     * @notice Ensures that a pharmaceutical batch exists.
+     *
+     * @param batchId Identifier of the pharmaceutical batch.
      */
     modifier batchExists(string memory batchId) {
-        require(batches[batchId].exists, "Batch does not exist");
+        require(
+            batches[batchId].exists,
+            "Batch does not exist"
+        );
         _;
     }
 
     /**
-     * @notice Restricts an operation to the current custodian of a batch.
+     * @notice Restricts an operation to the current batch custodian.
+     *
+     * @param batchId Identifier of the pharmaceutical batch.
      */
-    modifier onlyCurrentCustodian(string memory batchId) {
+    modifier onlyCurrentCustodian(
+        string memory batchId
+    ) {
         require(
             batches[batchId].currentCustodian == msg.sender,
             "Caller is not the current custodian"
@@ -192,12 +208,15 @@ contract PharmaceuticalProvenance {
     }
 
     // =============================================================
-    //                  STAKEHOLDER MANAGEMENT
+    //                    STAKEHOLDER MANAGEMENT
     // =============================================================
 
     /**
-     * @notice Registers an authorized pharmaceutical supply-chain stakeholder.
-     * @dev Only the administrator can assign stakeholder roles.
+     * @notice Registers or assigns a role to an authorized stakeholder.
+     *
+     * @dev Only the administrator can authorize stakeholder wallets.
+     *      Consumers do not need registration because they only use
+     *      public read functions.
      *
      * @param account Wallet address of the stakeholder.
      * @param role Role assigned to the stakeholder.
@@ -205,28 +224,44 @@ contract PharmaceuticalProvenance {
     function registerStakeholder(
         address account,
         Role role
-    ) external onlyAdmin {
-        require(account != address(0), "Invalid stakeholder address");
-        require(role != Role.None, "A valid role is required");
+    )
+        external
+        onlyAdmin
+    {
+        require(
+            account != address(0),
+            "Invalid stakeholder address"
+        );
+
+        require(
+            role != Role.None,
+            "A valid role is required"
+        );
 
         roles[account] = role;
 
-        emit StakeholderRegistered(account, role);
+        emit StakeholderRegistered(
+            account,
+            role
+        );
     }
 
     // =============================================================
-    //                     BATCH REGISTRATION
+    //                      BATCH REGISTRATION
     // =============================================================
 
     /**
      * @notice Registers a new pharmaceutical batch.
-     * @dev Only an authorized manufacturer can create a batch.
+     *
+     * @dev Only an authorized Manufacturer may register a batch.
+     *      The registering Manufacturer becomes the initial custodian,
+     *      and the initial status is Manufactured.
      *
      * @param batchId Unique pharmaceutical batch identifier.
      * @param drugName Name of the pharmaceutical product.
-     * @param manufactureDate Manufacturing date/timestamp.
-     * @param expirationDate Expiration date/timestamp.
-     * @param certificateHash Optional reference to an off-chain certificate.
+     * @param manufactureDate Manufacturing timestamp.
+     * @param expirationDate Expiration timestamp.
+     * @param certificateHash Optional off-chain certificate reference.
      */
     function registerBatch(
         string memory batchId,
@@ -234,11 +269,25 @@ contract PharmaceuticalProvenance {
         uint256 manufactureDate,
         uint256 expirationDate,
         string memory certificateHash
-    ) external onlyRole(Role.Manufacturer) {
+    )
+        external
+        onlyRole(Role.Manufacturer)
+    {
+        require(
+            bytes(batchId).length > 0,
+            "Batch ID is required"
+        );
 
-        require(bytes(batchId).length > 0, "Batch ID is required");
-        require(bytes(drugName).length > 0, "Drug name is required");
-        require(!batches[batchId].exists, "Batch already exists");
+        require(
+            bytes(drugName).length > 0,
+            "Drug name is required"
+        );
+
+        require(
+            !batches[batchId].exists,
+            "Batch already exists"
+        );
+
         require(
             expirationDate > manufactureDate,
             "Expiration must be after manufacture date"
@@ -257,35 +306,33 @@ contract PharmaceuticalProvenance {
             exists: true
         });
 
-        emit BatchRegistered(batchId, msg.sender);
+        emit BatchRegistered(
+            batchId,
+            msg.sender
+        );
     }
 
     // =============================================================
-    //                      CUSTODY TRANSFER
+    //                       CUSTODY TRANSFER
     // =============================================================
 
-    /**
-     * @notice Transfers responsibility for a pharmaceutical batch.
-     *
-     * @dev The caller must currently hold custody of the batch.
-     *      The recipient must already be registered as an authorized
-     *      supply-chain stakeholder.
-     *
-     * @param batchId Identifier of the batch being transferred.
-     * @param newCustodian Wallet address receiving custody.
-     */
     /**
      * @notice Transfers custody of a pharmaceutical batch to the next
      *         authorized participant in the supply chain.
      *
      * @dev Valid custody transitions are:
+     *
      *      Manufacturer -> Distributor
      *      Distributor  -> Pharmacy
      *
-     *      The caller must be the current custodian of the batch.
+     *      The caller must be the current custodian.
+     *      Pharmacy is the final custodian in this prototype.
+     *
+     *      A successful custody transfer automatically changes the
+     *      batch status to InTransit.
      *
      * @param batchId Unique identifier of the pharmaceutical batch.
-     * @param newCustodian Wallet address receiving custody of the batch.
+     * @param newCustodian Wallet address receiving custody.
      */
     function transferCustody(
         string memory batchId,
@@ -299,51 +346,55 @@ contract PharmaceuticalProvenance {
             newCustodian != address(0),
             "Invalid custodian address"
         );
-    
+
         require(
             newCustodian != msg.sender,
             "Batch is already held by this custodian"
         );
-    
+
         Role senderRole = roles[msg.sender];
         Role recipientRole = roles[newCustodian];
-    
+
         // Manufacturer can transfer only to a Distributor.
         if (senderRole == Role.Manufacturer) {
+
             require(
                 recipientRole == Role.Distributor,
                 "Manufacturer can transfer only to Distributor"
             );
         }
-    
+
         // Distributor can transfer only to a Pharmacy.
         else if (senderRole == Role.Distributor) {
+
             require(
                 recipientRole == Role.Pharmacy,
                 "Distributor can transfer only to Pharmacy"
             );
         }
-    
-        // Pharmacy is the final custodian in the current prototype.
+
+        // Pharmacy is the final custodian in the current workflow.
         else {
-            revert("Current role cannot transfer custody");
+            revert(
+                "Current role cannot transfer custody"
+            );
         }
-    
+
         address previousCustodian =
             batches[batchId].currentCustodian;
-    
+
         batches[batchId].currentCustodian =
             newCustodian;
-    
+
         batches[batchId].status =
             BatchStatus.InTransit;
-    
+
         emit CustodyTransferred(
             batchId,
             previousCustodian,
             newCustodian
         );
-    
+
         emit BatchStatusUpdated(
             batchId,
             BatchStatus.InTransit
@@ -351,14 +402,24 @@ contract PharmaceuticalProvenance {
     }
 
     // =============================================================
-    //                       STATUS UPDATES
+    //                        STATUS UPDATES
     // =============================================================
 
     /**
      * @notice Updates the lifecycle status of a pharmaceutical batch.
-     * @dev Only the current custodian may update the status.
      *
-     * @param batchId Identifier of the pharmaceutical batch.
+     * @dev Valid manual status transitions are:
+     *
+     *      Distributor:
+     *      InTransit -> Received
+     *
+     *      Pharmacy:
+     *      InTransit -> Received
+     *      Received  -> Delivered
+     *
+     *      Custody transfers automatically set the status to InTransit.
+     *
+     * @param batchId Unique identifier of the pharmaceutical batch.
      * @param newStatus New lifecycle status.
      */
     function updateBatchStatus(
@@ -369,20 +430,68 @@ contract PharmaceuticalProvenance {
         batchExists(batchId)
         onlyCurrentCustodian(batchId)
     {
-        batches[batchId].status = newStatus;
+        Role callerRole = roles[msg.sender];
 
-        emit BatchStatusUpdated(batchId, newStatus);
+        BatchStatus currentStatus =
+            batches[batchId].status;
+
+        // Distributor can only acknowledge receipt of an in-transit batch.
+        if (callerRole == Role.Distributor) {
+
+            require(
+                currentStatus == BatchStatus.InTransit &&
+                newStatus == BatchStatus.Received,
+                "Distributor can only mark InTransit batch as Received"
+            );
+        }
+
+        // Pharmacy may acknowledge receipt or complete delivery.
+        else if (callerRole == Role.Pharmacy) {
+
+            bool validPharmacyTransition =
+                (
+                    currentStatus == BatchStatus.InTransit &&
+                    newStatus == BatchStatus.Received
+                )
+                ||
+                (
+                    currentStatus == BatchStatus.Received &&
+                    newStatus == BatchStatus.Delivered
+                );
+
+            require(
+                validPharmacyTransition,
+                "Invalid Pharmacy status transition"
+            );
+        }
+
+        // Manufacturer status is controlled by registration and transfer.
+        else {
+            revert(
+                "Current role cannot update batch status"
+            );
+        }
+
+        batches[batchId].status =
+            newStatus;
+
+        emit BatchStatusUpdated(
+            batchId,
+            newStatus
+        );
     }
 
     // =============================================================
-    //                    REGULATORY VERIFICATION
+    //                   REGULATORY VERIFICATION
     // =============================================================
 
     /**
-     * @notice Marks an existing pharmaceutical batch as regulator verified.
-     * @dev Only a stakeholder with the Regulator role may call this function.
+     * @notice Marks a pharmaceutical batch as regulator verified.
      *
-     * @param batchId Identifier of the pharmaceutical batch.
+     * @dev Only a registered Regulator may verify a batch.
+     *      A batch can only be verified once.
+     *
+     * @param batchId Unique identifier of the pharmaceutical batch.
      */
     function verifyBatch(
         string memory batchId
@@ -391,22 +500,32 @@ contract PharmaceuticalProvenance {
         onlyRole(Role.Regulator)
         batchExists(batchId)
     {
-        require(!batches[batchId].verified, "Batch already verified");
+        require(
+            !batches[batchId].verified,
+            "Batch already verified"
+        );
 
         batches[batchId].verified = true;
 
-        emit BatchVerified(batchId, msg.sender);
+        emit BatchVerified(
+            batchId,
+            msg.sender
+        );
     }
 
     // =============================================================
-    //                       READ FUNCTIONS
+    //                         READ FUNCTIONS
     // =============================================================
 
     /**
      * @notice Returns the current information stored for a batch.
-     * @dev This read-only function can later be called by the consumer dApp.
      *
-     * @param batchId Identifier of the pharmaceutical batch.
+     * @dev This function is public/read-only and can later be used
+     *      by the consumer-facing dApp.
+     *
+     * @param batchId Unique identifier of the pharmaceutical batch.
+     *
+     * @return DrugBatch Current batch information.
      */
     function getBatch(
         string memory batchId
@@ -420,9 +539,12 @@ contract PharmaceuticalProvenance {
     }
 
     /**
-     * @notice Returns whether a pharmaceutical batch has been verified.
+     * @notice Returns whether a pharmaceutical batch has been
+     *         verified by an authorized regulator.
      *
-     * @param batchId Identifier of the pharmaceutical batch.
+     * @param batchId Unique identifier of the pharmaceutical batch.
+     *
+     * @return bool True if the batch has been verified.
      */
     function isBatchVerified(
         string memory batchId
