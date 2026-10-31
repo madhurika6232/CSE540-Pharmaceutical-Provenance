@@ -37,12 +37,13 @@ contract PharmaceuticalProvenance {
     /**
      * @notice Lifecycle states of a pharmaceutical batch.
      */
-    enum BatchStatus {
-        Manufactured,
-        InTransit,
-        Received,
-        Delivered
-    }
+  enum BatchStatus {
+    Manufactured,
+    InTransit,
+    AtPharmacy,
+    Dispensed,
+    Recalled
+}
 
     // =============================================================
     //                           STRUCTS
@@ -72,6 +73,8 @@ contract PharmaceuticalProvenance {
         BatchStatus status;
         string certificateHash;
         bool verified;
+        bool flagged;
+        string flagReason;
         bool exists;
     }
 
@@ -138,6 +141,26 @@ contract PharmaceuticalProvenance {
         string batchId,
         address indexed regulator
     );
+
+/**
+ * @notice Emitted when a regulator recalls a pharmaceutical batch.
+ */
+event BatchRecalled(
+    string batchId,
+    address indexed regulator,
+    string reason
+);
+
+/**
+ * @notice Emitted when a regulator flags a suspicious batch.
+ */
+event BatchFlagged(
+    string batchId,
+    address indexed regulator,
+    string reason
+);
+
+
 
     // =============================================================
     //                         CONSTRUCTOR
@@ -211,22 +234,26 @@ contract PharmaceuticalProvenance {
     //                    STAKEHOLDER MANAGEMENT
     // =============================================================
 
-    /**
-     * @notice Registers or assigns a role to an authorized stakeholder.
-     *
-     * @dev Only the administrator can authorize stakeholder wallets.
-     *      Consumers do not need registration because they only use
-     *      public read functions.
-     *
-     * @param account Wallet address of the stakeholder.
-     * @param role Role assigned to the stakeholder.
-     */
+    
+        /**
+         * @notice Allows a regulator to approve supply-chain stakeholders.
+         *
+         * @dev Only an authorized Regulator may register Manufacturers,
+         *      Distributors, and Pharmacies.
+         *      The administrator appoints regulators separately.
+         *      Consumers do not need registration because they use
+         *      public read-only functions.
+         *
+         * @param account Wallet address of the stakeholder.
+         * @param role Role assigned to the stakeholder.
+         */
+
     function registerStakeholder(
         address account,
         Role role
     )
         external
-        onlyAdmin
+        onlyRole(Role.Regulator)
     {
         require(
             account != address(0),
@@ -234,9 +261,16 @@ contract PharmaceuticalProvenance {
         );
 
         require(
-            role != Role.None,
-            "A valid role is required"
+            role == Role.Manufacturer ||
+            role == Role.Distributor ||
+            role == Role.Pharmacy,
+            "Regulator can approve only supply-chain stakeholders"
         );
+
+require(
+    roles[account] == Role.None,
+    "Account already has a role"
+);
 
         roles[account] = role;
 
@@ -245,6 +279,33 @@ contract PharmaceuticalProvenance {
             role
         );
     }
+
+/**
+ * @notice Allows the administrator to appoint a regulator.
+ * @param account Wallet address of the regulator.
+ */
+function registerRegulator(address account)
+    external
+    onlyAdmin
+{
+    require(
+        account != address(0),
+        "Invalid regulator address"
+    );
+
+    require(
+        roles[account] == Role.None,
+        "Account already has a role"
+    );
+
+    roles[account] = Role.Regulator;
+
+    emit StakeholderRegistered(
+        account,
+        Role.Regulator
+    );
+}
+
 
     // =============================================================
     //                      BATCH REGISTRATION
@@ -303,6 +364,8 @@ contract PharmaceuticalProvenance {
             status: BatchStatus.Manufactured,
             certificateHash: certificateHash,
             verified: false,
+            flagged: false,
+            flagReason: "",
             exists: true
         });
 
@@ -342,6 +405,12 @@ contract PharmaceuticalProvenance {
         batchExists(batchId)
         onlyCurrentCustodian(batchId)
     {
+    require(
+        batches[batchId].status != BatchStatus.Recalled &&
+        batches[batchId].status != BatchStatus.Dispensed,
+        "Cannot transfer recalled or dispensed batch"
+    );
+
         require(
             newCustodian != address(0),
             "Invalid custodian address"
@@ -351,12 +420,24 @@ contract PharmaceuticalProvenance {
             newCustodian != msg.sender,
             "Batch is already held by this custodian"
         );
+// Custody transfer is allowed only for an active batch.
+// Manufactured batches may leave the manufacturer.
+// InTransit batches may move from distributor to pharmacy.
+require(
+    batches[batchId].status == BatchStatus.Manufactured ||
+    batches[batchId].status == BatchStatus.InTransit,
+    "Batch status does not permit custody transfer"
+);
 
         Role senderRole = roles[msg.sender];
         Role recipientRole = roles[newCustodian];
 
         // Manufacturer can transfer only to a Distributor.
         if (senderRole == Role.Manufacturer) {
+require(
+    batches[batchId].status == BatchStatus.Manufactured,
+    "Manufacturer can transfer only manufactured batches"
+);
 
             require(
                 recipientRole == Role.Distributor,
@@ -366,6 +447,10 @@ contract PharmaceuticalProvenance {
 
         // Distributor can transfer only to a Pharmacy.
         else if (senderRole == Role.Distributor) {
+require(
+    batches[batchId].status == BatchStatus.InTransit,
+    "Distributor can transfer only in-transit batches"
+);
 
             require(
                 recipientRole == Role.Pharmacy,
@@ -406,80 +491,65 @@ contract PharmaceuticalProvenance {
     // =============================================================
 
     /**
-     * @notice Updates the lifecycle status of a pharmaceutical batch.
-     *
-     * @dev Valid manual status transitions are:
-     *
-     *      Distributor:
-     *      InTransit -> Received
-     *
-     *      Pharmacy:
-     *      InTransit -> Received
-     *      Received  -> Delivered
-     *
-     *      Custody transfers automatically set the status to InTransit.
-     *
-     * @param batchId Unique identifier of the pharmaceutical batch.
-     * @param newStatus New lifecycle status.
-     */
-    function updateBatchStatus(
-        string memory batchId,
-        BatchStatus newStatus
-    )
-        external
-        batchExists(batchId)
-        onlyCurrentCustodian(batchId)
-    {
-        Role callerRole = roles[msg.sender];
+ * @notice Updates the lifecycle status of a pharmaceutical batch.
+ *
+ * @dev Only the current Pharmacy custodian can manually
+ *      update a batch's lifecycle status.
+ *
+ *      Valid transitions:
+ *      InTransit  -> AtPharmacy
+ *      AtPharmacy -> Dispensed
+ *
+ *      Custody transfers automatically set the status to InTransit.
+ *      Regulators can recall batches through a separate function.
+ *
+ * @param batchId Unique identifier of the pharmaceutical batch.
+ * @param newStatus New lifecycle status.
+ */
+    
+function updateBatchStatus(
+    string memory batchId,
+    BatchStatus newStatus
+)
+    external
+    batchExists(batchId)
+    onlyCurrentCustodian(batchId)
+{
+    Role callerRole = roles[msg.sender];
 
-        BatchStatus currentStatus =
-            batches[batchId].status;
+    BatchStatus currentStatus =
+        batches[batchId].status;
 
-        // Distributor can only acknowledge receipt of an in-transit batch.
-        if (callerRole == Role.Distributor) {
+    // Only a Pharmacy can manually update the batch status.
+    require(
+        callerRole == Role.Pharmacy,
+        "Only Pharmacy can update batch status"
+    );
 
-            require(
-                currentStatus == BatchStatus.InTransit &&
-                newStatus == BatchStatus.Received,
-                "Distributor can only mark InTransit batch as Received"
-            );
-        }
-
-        // Pharmacy may acknowledge receipt or complete delivery.
-        else if (callerRole == Role.Pharmacy) {
-
-            bool validPharmacyTransition =
-                (
-                    currentStatus == BatchStatus.InTransit &&
-                    newStatus == BatchStatus.Received
-                )
-                ||
-                (
-                    currentStatus == BatchStatus.Received &&
-                    newStatus == BatchStatus.Delivered
-                );
-
-            require(
-                validPharmacyTransition,
-                "Invalid Pharmacy status transition"
-            );
-        }
-
-        // Manufacturer status is controlled by registration and transfer.
-        else {
-            revert(
-                "Current role cannot update batch status"
-            );
-        }
-
-        batches[batchId].status =
-            newStatus;
-
-        emit BatchStatusUpdated(
-            batchId,
-            newStatus
+    // Allowed transitions:
+    // InTransit -> AtPharmacy
+    // AtPharmacy -> Dispensed
+    bool validTransition =
+        (
+            currentStatus == BatchStatus.InTransit &&
+            newStatus == BatchStatus.AtPharmacy
+        )
+        ||
+        (
+            currentStatus == BatchStatus.AtPharmacy &&
+            newStatus == BatchStatus.Dispensed
         );
-    }
+
+    require(
+        validTransition,
+        "Invalid batch status transition"
+    );
+
+    batches[batchId].status = newStatus;
+
+    emit BatchStatusUpdated(batchId, newStatus);
+}
+
 
     // =============================================================
     //                   REGULATORY VERIFICATION
@@ -500,6 +570,10 @@ contract PharmaceuticalProvenance {
         onlyRole(Role.Regulator)
         batchExists(batchId)
     {
+require(
+    batches[batchId].status != BatchStatus.Recalled,
+    "Cannot verify a recalled batch"
+);
         require(
             !batches[batchId].verified,
             "Batch already verified"
@@ -512,6 +586,89 @@ contract PharmaceuticalProvenance {
             msg.sender
         );
     }
+
+/**
+ * @notice Allows a regulator to recall a pharmaceutical batch.
+ * @dev Only an authorized regulator can recall a registered batch.
+ *      Recalled batches cannot be transferred or dispensed.
+ *
+ * @param batchId Unique identifier of the batch.
+ * @param reason Explanation for the recall.
+ */
+function recallBatch(
+    string memory batchId,
+    string memory reason
+)
+    external
+    onlyRole(Role.Regulator)
+    batchExists(batchId)
+{
+    require(
+        batches[batchId].status != BatchStatus.Recalled,
+        "Batch already recalled"
+    );
+
+    require(
+        bytes(reason).length > 0,
+        "Recall reason is required"
+    );
+
+    batches[batchId].status = BatchStatus.Recalled;
+
+    emit BatchStatusUpdated(
+        batchId,
+        BatchStatus.Recalled
+    );
+
+    emit BatchRecalled(
+        batchId,
+        msg.sender,
+        reason
+    );
+}
+
+/**
+ * @notice Allows a regulator to flag a suspicious batch.
+ * @dev Only an authorized regulator may flag an existing,
+ *      non-recalled batch. Flagging records a reason without
+ *      changing the batch lifecycle status.
+ *
+ * @param batchId Unique identifier of the batch.
+ * @param reason Explanation for flagging the batch.
+ */
+function flagBatch(
+    string memory batchId,
+    string memory reason
+)
+    external
+    onlyRole(Role.Regulator)
+    batchExists(batchId)
+{
+    require(
+        batches[batchId].status != BatchStatus.Recalled,
+        "Cannot flag a recalled batch"
+    );
+
+    require(
+        !batches[batchId].flagged,
+        "Batch already flagged"
+    );
+
+    require(
+        bytes(reason).length > 0,
+        "Flag reason is required"
+    );
+
+    batches[batchId].flagged = true;
+    batches[batchId].flagReason = reason;
+
+    emit BatchFlagged(
+        batchId,
+        msg.sender,
+        reason
+    );
+}
+
 
     // =============================================================
     //                         READ FUNCTIONS
