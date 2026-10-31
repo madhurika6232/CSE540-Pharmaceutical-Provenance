@@ -1,6 +1,7 @@
 # CSE540-Pharmaceutical-Provenance
-Blockchain-based pharmaceutical drug provenance and anti-counterfeit system using Solidity and Polygon Amoy Testnet — CSE 540 Fall B 2026.
 # Blockchain-Based Pharmaceutical Drug Provenance and Anti-Counterfeit System
+
+Blockchain-based pharmaceutical drug provenance and anti-counterfeit system using Solidity and Polygon Amoy Testnet.
 
 CSE 540 — Engineering Blockchain Applications  
 Fall B 2026 — Project Group 1
@@ -19,54 +20,71 @@ The prototype models the following pharmaceutical supply-chain workflow:
 
 Manufacturer → Distributor → Pharmacy → Consumer Verification
 
-A regulator independently verifies registered pharmaceutical batches.
+A regulator independently approves supply-chain stakeholders,
+verifies pharmaceutical batches, and can flag or recall suspicious batches.
 
 A typical batch lifecycle is:
 
-1. The administrator registers authorized stakeholder wallet addresses.
-2. A manufacturer registers a pharmaceutical batch.
-3. The manufacturer transfers custody to a distributor.
-4. The distributor records receipt of the batch.
-5. The distributor transfers custody to a pharmacy.
-6. The pharmacy records receipt and delivery.
-7. A regulator verifies the registered batch.
-8. Consumers can retrieve the batch record and verify its recorded status.
+1. The administrator deploys the smart contract.
+2. The administrator appoints an authorized regulator.
+3. The regulator approves Manufacturer, Distributor, and Pharmacy wallet addresses.
+4. A manufacturer registers a pharmaceutical batch.
+5. The manufacturer transfers custody to an authorized distributor.
+6. The distributor transfers custody to an authorized pharmacy.
+7. The pharmacy updates the batch status from `InTransit` to `AtPharmacy`.
+8. The pharmacy updates the batch status from `AtPharmacy` to `Dispensed`.
+9. A regulator can verify, flag, or recall a registered batch.
+10. Consumers retrieve batch information and verify its recorded provenance.
 
-Major state changes are emitted as blockchain events to provide an auditable provenance history.
+The supported batch lifecycle is:
 
+`Manufactured → InTransit → AtPharmacy → Dispensed`
+
+A regulator may recall a batch from any non-recalled lifecycle state.
+Flagging a batch records a warning without changing its lifecycle status.
+
+Major state changes emit blockchain events to provide an auditable
+provenance history.
 ## System Architecture
 
 The high-level architecture shows how pharmaceutical supply-chain stakeholders interact with the Solidity smart contract, web dApp, and optional off-chain storage.
 
 ![Pharmaceutical Provenance System Architecture](docs/architecture.png)
 
+
 ## Stakeholder Roles
 
 ### Administrator
-- Authorizes stakeholder wallet addresses.
-- Assigns Manufacturer, Distributor, Pharmacy, or Regulator roles.
+- Deploys the smart contract.
+- Appoints authorized regulators using `registerRegulator()`.
+- Does not directly approve supply-chain stakeholders.
 
 ### Manufacturer
 - Registers pharmaceutical batches.
 - Becomes the initial custodian of registered batches.
-- Transfers custody to an authorized supply-chain participant.
+- Transfers manufactured batches to authorized distributors.
 
 ### Distributor
-- Receives pharmaceutical batches.
-- Updates batch status.
-- Transfers custody to the next authorized participant.
+- Receives pharmaceutical batches from manufacturers.
+- Transfers in-transit batches to authorized pharmacies.
 
 ### Pharmacy
-- Receives pharmaceutical batches.
-- Updates the final batch status.
-- Represents the final supply-chain custodian in the current prototype.
+- Receives pharmaceutical batches from distributors.
+- Updates batch status from `InTransit` to `AtPharmacy`.
+- Marks batches as `Dispensed`.
+- Represents the final supply-chain custodian.
 
 ### Regulator
+- Approves Manufacturers, Distributors, and Pharmacies.
 - Verifies registered pharmaceutical batches.
+- Flags suspicious batches with a recorded reason.
+- Recalls pharmaceutical batches when necessary.
 
 ### Consumer
-- Does not require a blockchain role.
-- Uses read-only functions to retrieve batch information and verification status.
+- Does not require a blockchain role or wallet for read-only queries.
+- Retrieves pharmaceutical batch information and verification status.
+- Can view recorded flagging and recall information.
+
 
 ## Smart Contract Design
 
@@ -89,40 +107,55 @@ The contract uses modifiers to restrict sensitive operations:
 - `batchExists`
 - `onlyCurrentCustodian`
 
+
 ### Core Functions
 
+`registerRegulator(address account)`  
+Allows the contract administrator to appoint an authorized regulator.
+
 `registerStakeholder(address account, Role role)`  
-Registers an authorized supply-chain stakeholder. This operation is restricted to the contract administrator.
+Allows an authorized regulator to approve Manufacturers, Distributors, and Pharmacies.
 
 `registerBatch(string batchId, string drugName, uint256 manufactureDate, uint256 expirationDate, string certificateHash)`  
-Registers a new pharmaceutical batch. Only an authorized manufacturer can perform this operation.
+Allows an authorized manufacturer to register a new pharmaceutical batch.
 
 `transferCustody(string batchId, address newCustodian)`  
-Transfers responsibility for a registered batch from its current custodian to another authorized stakeholder.
+Transfers a batch from its current custodian to the next authorized supply-chain participant. Recalled or dispensed batches cannot be transferred.
 
 `updateBatchStatus(string batchId, BatchStatus newStatus)`  
-Updates the lifecycle status of a batch. Only the current custodian can perform this operation.
+Allows the current Pharmacy custodian to update a batch from `InTransit` to `AtPharmacy`, and then to `Dispensed`.
 
 `verifyBatch(string batchId)`  
-Allows an authorized regulator to mark a registered batch as verified.
+Allows an authorized regulator to verify a registered batch that has not been recalled.
+
+`recallBatch(string batchId, string reason)`  
+Allows an authorized regulator to recall a batch and record the recall reason.
+
+`flagBatch(string batchId, string reason)`  
+Allows an authorized regulator to flag a suspicious batch without changing its lifecycle status.
 
 `getBatch(string batchId)`  
-Returns the current information associated with a registered pharmaceutical batch.
+Returns the current batch information, including its status, verification status, flag status, and flag reason.
 
 `isBatchVerified(string batchId)`  
 Returns whether a registered batch has been verified by a regulator.
 
+
+
 ## Blockchain Events
 
-The contract emits the following events:
+The smart contract emits the following events:
 
-- `StakeholderRegistered`
-- `BatchRegistered`
-- `CustodyTransferred`
-- `BatchStatusUpdated`
-- `BatchVerified`
+- `StakeholderRegistered` — Records regulator appointments and stakeholder approvals.
+- `BatchRegistered` — Records new pharmaceutical batch registrations.
+- `CustodyTransferred` — Records changes in batch custody.
+- `BatchStatusUpdated` — Records batch lifecycle status changes, including recalls.
+- `BatchVerified` — Records regulatory verification of batches.
+- `BatchRecalled` — Records batch recalls, regulator addresses, and recall reasons.
+- `BatchFlagged` — Records suspicious batch flags, regulator addresses, and flagging reasons.
 
-These events are intended to provide an auditable history of major supply-chain actions without requiring the complete transaction history to be duplicated in contract storage.
+These events provide an auditable history of important pharmaceutical supply-chain operations without duplicating the entire transaction history in contract storage.
+
 
 ## Repository Structure
 
@@ -177,7 +210,8 @@ Use a Solidity compiler compatible with:
 
     pragma solidity ^0.8.20;
 
-The current draft has been successfully compiled using Solidity 0.8.20 in Remix.
+
+The updated smart contract was successfully compiled using Solidity 0.8.34 in Remix IDE. The contract specifies `pragma solidity ^0.8.20`, which is compatible with this compiler version.
 
 ### 4. Local Deployment
 
@@ -195,19 +229,27 @@ No constructor parameters are required.
 
 The following example demonstrates the intended workflow.
 
+
 ### Register Stakeholders
 
-From the administrator account, call:
+First, the contract administrator appoints an authorized regulator:
 
-    registerStakeholder(account, role)
+`registerRegulator(regulatorAddress)`
+
+The authorized regulator then approves Manufacturer, Distributor, and Pharmacy wallet addresses:
+
+`registerStakeholder(account, role)`
 
 Role values are:
 
-    0 = None
-    1 = Manufacturer
-    2 = Distributor
-    3 = Pharmacy
-    4 = Regulator
+- `0` = None
+- `1` = Manufacturer
+- `2` = Distributor
+- `3` = Pharmacy
+- `4` = Regulator
+
+Only the administrator can appoint regulators, while only authorized regulators can approve supply-chain stakeholders.
+
 
 ### Register a Pharmaceutical Batch
 
@@ -231,24 +273,62 @@ The current custodian can call:
 
 A successful transfer changes the current custodian and sets the batch status to `InTransit`.
 
+
 ### Update Batch Status
 
-The current custodian can call:
+Only the current Pharmacy custodian can manually update a batch's lifecycle status.
 
-    updateBatchStatus("MED-2026-001", newStatus)
+Call:
 
-Status values are:
+`updateBatchStatus("MED-2026-001", newStatus)`
 
-    0 = Manufactured
-    1 = InTransit
-    2 = Received
-    3 = Delivered
+Batch status values are:
+
+- `0` = Manufactured
+- `1` = InTransit
+- `2` = AtPharmacy
+- `3` = Dispensed
+- `4` = Recalled
+
+Valid manual status transitions are:
+
+- `InTransit` → `AtPharmacy`
+- `AtPharmacy` → `Dispensed`
+
+Custody transfers automatically set the status to `InTransit`.
+
+The `Recalled` status can only be assigned by an authorized regulator using `recallBatch()`. Recalled or dispensed batches cannot be transferred.
+
+
 
 ### Verify the Batch
 
-From a registered Regulator account, call:
+An authorized Regulator can verify a registered pharmaceutical batch that has not been recalled:
 
-    verifyBatch("MED-2026-001")
+`verifyBatch("MED-2026-001")`
+
+A batch can only be verified once.
+
+### Flag a Suspicious Batch
+
+An authorized Regulator can flag a suspicious batch and record the reason:
+
+`flagBatch("MED-2026-001", "Suspected counterfeit packaging")`
+
+Flagging sets the batch's `flagged` field to `true` and stores the `flagReason` without changing its lifecycle status.
+
+A batch cannot be flagged more than once or flagged after recall.
+
+### Recall a Batch
+
+An authorized Regulator can recall a pharmaceutical batch:
+
+`recallBatch("MED-2026-001", "Product safety concern")`
+
+Recalling changes the lifecycle status to `Recalled` and emits `BatchStatusUpdated` and `BatchRecalled` events.
+
+Recalled batches cannot be transferred, dispensed, or newly verified.
+
 
 ### Retrieve Provenance Information
 
@@ -262,28 +342,36 @@ and:
 
 to retrieve the current batch information and regulatory verification status.
 
+
 ## Current Development Status
 
 The Smart Contract Design Draft currently includes:
 
-- Smart contract structure
+- Smart contract structure and interfaces
 - Stakeholder role definitions
 - Pharmaceutical batch data model
+- Administrator-controlled regulator appointment
+- Regulator-controlled stakeholder approval
 - Role-based access control
-- Batch registration
-- Custody transfer
-- Status updates
-- Regulatory verification
-- Event definitions
-- Read-only provenance functions
-- Successful Solidity compilation
-- Local workflow testing using Remix VM
+- Pharmaceutical batch registration
+- Manufacturer-to-distributor custody transfer
+- Distributor-to-pharmacy custody transfer
+- Batch lifecycle status updates
+- Regulatory batch verification
+- Batch flagging with recorded reasons
+- Batch recall functionality
+- Blockchain events for major operations
+- Public read-only provenance functions
+- Successful Solidity compilation using version 0.8.34 in Remix IDE
 
-The current contract has been tested through the following simulated workflow:
+The implemented batch lifecycle is:
 
-Manufacturer → Distributor → Pharmacy → Regulator Verification
+`Manufactured → InTransit → AtPharmacy → Dispensed`
 
-The testing confirmed batch registration, custody transfers, status updates, regulatory verification, and access-control behavior.
+Authorized regulators can recall a batch from any non-recalled lifecycle state. They can also flag suspicious batches without changing their lifecycle status.
+
+The updated contract has been successfully compiled in Remix IDE. End-to-end transaction testing and deployment validation remain planned for subsequent development.
+
 
 ## Planned Development
 
